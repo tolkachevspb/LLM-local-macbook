@@ -1370,6 +1370,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"models": scan_models(), "current": _current_model_alias})
         elif self.path == "/admin/status":
             self._send_json({**_switch_status, "model": _current_model_alias})
+        elif self.path == "/admin/reset":
+            _switch_status.update({"phase": "ready", "message": ""})
+            self._send_json({"status": "reset", "model": _current_model_alias})
         else:
             self._send_json({"error": "Not found"}, status=404)
 

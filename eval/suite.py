@@ -556,12 +556,59 @@ def wait_for_proxy(timeout=10):
 
 
 # ── Model switching ───────────────────────────────────────────────────────────
+def wait_for_ready(timeout=SWITCH_TIMEOUT_S):
+    """Ждём пока статус станет ready или error."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            s = api_get("/admin/status")
+            if s.get("phase") in ("ready", "error"):
+                return s
+        except Exception:
+            pass
+        time.sleep(2)
+    return None
+
+
 def switch_model(model_file, alias, timeout=SWITCH_TIMEOUT_S):
+    # Сначала ждём если предыдущее переключение ещё идёт
+    status = None
+    try:
+        status = api_get("/admin/status")
+    except Exception:
+        pass
+
+    if status and status.get("phase") not in ("ready", "error"):
+        print(f"    Жду завершения предыдущего переключения...", end="", flush=True)
+        status = wait_for_ready(60)
+        if not status:
+            print(" таймаут ожидания.")
+            return False
+        print(" готово.")
+
+    # Если уже активна нужная модель — не переключаем
+    if status and status.get("phase") == "ready" and status.get("model") == alias:
+        print(f"    Уже активна: {alias}")
+        return True
+
     print(f"    Переключаю на {alias}...", end="", flush=True)
     try:
         api_post("/admin/switch", {"model_file": model_file, "alias": alias})
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            # Попробуем ещё раз подождать и повторить
+            print(" (409, жду)...", end="", flush=True)
+            wait_for_ready(30)
+            try:
+                api_post("/admin/switch", {"model_file": model_file, "alias": alias})
+            except Exception as e2:
+                print(f" ОШИБКА: {e2}")
+                return False
+        else:
+            print(f" ОШИБКА HTTP {e.code}: {e}")
+            return False
     except Exception as e:
-        print(f" ОШИБКА switch: {e}")
+        print(f" ОШИБКА: {e}")
         return False
 
     deadline = time.time() + timeout
