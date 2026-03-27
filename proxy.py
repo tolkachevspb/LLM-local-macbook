@@ -222,11 +222,43 @@ def render_prompt(messages: list) -> str:
     return "".join(parts)
 
 
+def _stop_tokens() -> list:
+    """Stop-токены в зависимости от активной модели."""
+    alias = _current_model_alias.lower()
+    if "gigachat" in alias:
+        return ["<|message_sep|>", "</s>"]
+    if "phi" in alias:
+        # Phi генерирует "user" / "assistant" как plain text после ответа
+        return ["<|end|>", "<|user|>", "<|assistant|>", "<|system|>", "<|endoftext|>",
+                "\nuser", "\nassistant", "\nsystem"]
+    if "qwen" in alias:
+        return ["<|im_end|>", "<|im_start|>", "<|endoftext|>",
+                "\nuser", "\nassistant"]
+    if "gemma" in alias:
+        return ["<end_of_turn>", "<start_of_turn>"]
+    if "llama" in alias or "mistral" in alias:
+        return ["[INST]", "[/INST]", "</s>", "<|eot_id|>"]
+    # Универсальный fallback
+    return ["</s>", "<|endoftext|>", "<|end|>", "<|im_end|>",
+            "\nuser", "\nassistant"]
+
+
+# Паттерны стоп-токенов для финальной очистки ответа
+_STOP_PATTERNS = re.compile(
+    r"(<\|message_sep\|>.*|<\|role_sep\|>.*|<\|end_of_assistant\|>.*"
+    r"|<\|end\|>.*|<\|im_end\|>.*|<\|im_start\|>.*"
+    r"|<end_of_turn>.*|<start_of_turn>.*"
+    r"|<\|eot_id\|>.*|\[INST\].*|\[/INST\].*"
+    r"|<\|endoftext\|>.*|<\|user\|>.*|<\|assistant\|>.*|<\|system\|>.*"
+    r"|\n+user\s*$|\n+assistant\s*$|\n+system\s*$)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
 def clean_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"^\s*(\[\]|<\|[^>]+?\|>|\n)+", "", text)
-    text = re.sub(r"(<\|message_sep\|>.*)$", "", text, flags=re.DOTALL)
-    text = re.sub(r"(<\|role_sep\|>.*)$", "", text, flags=re.DOTALL)
+    text = _STOP_PATTERNS.sub("", text)
     return text.strip()
 
 
@@ -236,7 +268,7 @@ def backend_completion(prompt: str, temperature: float, max_tokens: int) -> tupl
         "prompt": prompt,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "stop": ["<|message_sep|>", "</s>"],
+        "stop": _stop_tokens(),
     }
     request = urllib.request.Request(
         f"{BACKEND_BASE}/v1/completions",
@@ -259,7 +291,7 @@ def backend_completion_stream(prompt: str, temperature: float, max_tokens: int):
         "prompt": prompt,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "stop": ["<|message_sep|>", "</s>"],
+        "stop": _stop_tokens(),
         "stream": True,
     }
     request = urllib.request.Request(
