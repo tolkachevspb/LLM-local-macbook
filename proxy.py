@@ -480,6 +480,13 @@ UI_HTML = r"""<!doctype html>
     .avatar-assistant {
       background: linear-gradient(135deg, #0ea5e9, #6366f1); color: #fff;
     }
+    /* Цвета аватаров для конкретных моделей */
+    .avatar-gigachat  { background: linear-gradient(135deg, #7c3aed, #db2777); color: #fff; }
+    .avatar-phi       { background: linear-gradient(135deg, #0369a1, #0ea5e9); color: #fff; }
+    .avatar-qwen      { background: linear-gradient(135deg, #047857, #10b981); color: #fff; }
+    .avatar-gemma     { background: linear-gradient(135deg, #b45309, #f59e0b); color: #fff; }
+    .avatar-llama     { background: linear-gradient(135deg, #7f1d1d, #ef4444); color: #fff; }
+    .avatar-mistral   { background: linear-gradient(135deg, #1e3a5f, #3b82f6); color: #fff; }
 
     .msg-body { flex: 1; min-width: 0; max-width: 780px; }
     .msg-row.user .msg-body { text-align: right; }
@@ -1043,6 +1050,39 @@ function loadSession(id) {
 // ── Chat render ───────────────────────────────────────────
 const emptyNode = document.getElementById('empty');
 
+// ── Профили моделей ──────────────────────────────────────────
+const MODEL_PROFILES = {
+  gigachat: { label: 'GigaChat',    letter: 'G', cls: 'avatar-gigachat' },
+  phi:      { label: 'Phi',         letter: 'Φ', cls: 'avatar-phi'      },
+  qwen:     { label: 'Qwen',        letter: 'Q', cls: 'avatar-qwen'     },
+  gemma:    { label: 'Gemma',       letter: 'Ge', cls: 'avatar-gemma'   },
+  llama:    { label: 'Llama',       letter: 'L', cls: 'avatar-llama'    },
+  mistral:  { label: 'Mistral',     letter: 'M', cls: 'avatar-mistral'  },
+};
+
+function modelProfile(alias) {
+  if (!alias) alias = '';
+  const a = alias.toLowerCase();
+  for (const [key, p] of Object.entries(MODEL_PROFILES)) {
+    if (a.includes(key)) return p;
+  }
+  // Fallback: первая буква алиаса
+  const letter = alias.charAt(0).toUpperCase() || '?';
+  return { label: alias || 'AI', letter, cls: 'avatar-assistant' };
+}
+
+function friendlyModelName(alias) {
+  if (!alias) return 'AI';
+  const p = modelProfile(alias);
+  // Добавляем размер модели если есть в алиасе (7b, 14b, ...)
+  const sizeMatch = alias.match(/(\d+\.?\d*b)/i);
+  const size = sizeMatch ? ' ' + sizeMatch[1].toUpperCase() : '';
+  // Добавляем квантизацию если есть
+  const quantMatch = alias.match(/(q4|q6|q8)[\w]*/i);
+  const quant = quantMatch ? ' · ' + quantMatch[0].toUpperCase() : '';
+  return p.label + size + quant;
+}
+
 function msgRowHtml(m, i) {
   const isUser = m.role === 'user';
   const bubbleCls = isUser ? 'bubble-user' : 'bubble-assistant';
@@ -1050,12 +1090,19 @@ function msgRowHtml(m, i) {
     ? `<div class="msg-bubble ${bubbleCls}">${escHtml(m.content)}</div>`
     : `<div class="msg-bubble ${bubbleCls} md" id="bubble-${i}">${renderMd(m.content)}</div>`;
   const time = m.ts ? new Date(m.ts).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '';
+
+  // Для сообщений ассистента берём профиль из сохранённого алиаса модели
+  const profile  = isUser ? null : modelProfile(m.model || '');
+  const avatarCls = isUser ? 'avatar-user' : (profile ? profile.cls : 'avatar-assistant');
+  const avatarLetter = isUser ? 'В' : (profile ? profile.letter : '?');
+  const senderName = isUser ? 'Вы' : friendlyModelName(m.model || '');
+
   return `
     <div class="msg-row ${m.role}" data-idx="${i}">
-      <div class="avatar ${isUser ? 'avatar-user' : 'avatar-assistant'}">${isUser ? 'В' : 'G'}</div>
+      <div class="avatar ${avatarCls}" title="${senderName}">${avatarLetter}</div>
       <div class="msg-body">
         <div class="msg-meta">
-          <span class="msg-name">${isUser ? 'Вы' : 'GigaChat'}</span>
+          <span class="msg-name">${senderName}</span>
           ${time ? `<span>${time}</span>` : ''}
         </div>
         ${content}
@@ -1144,7 +1191,9 @@ async function send() {
 
   sess.messages.push({ role: 'user', content: text, ts: Date.now() });
   apiMsgs.push({ role: 'user', content: text });
-  sess.messages.push({ role: 'assistant', content: '', ts: Date.now(), _streaming: true });
+  // Сохраняем алиас активной модели в каждом сообщении ассистента
+  const activeModel = document.getElementById('modelBadgeLabel').textContent.trim();
+  sess.messages.push({ role: 'assistant', content: '', ts: Date.now(), model: activeModel, _streaming: true });
   const idx = sess.messages.length - 1;
 
   document.getElementById('topbar-title').textContent = sess.title;
