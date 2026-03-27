@@ -81,6 +81,10 @@ case "${cmd}" in
   benchmark)
     python3 ./benchmark.py
     ;;
+  eval)
+    shift || true
+    python3 ./eval/suite.py "$@"
+    ;;
   bootstrap)
     shift || true
     ./bootstrap.sh "${@:-bootstrap}"
@@ -104,6 +108,7 @@ GigaChat Localhost — управление локальным LLM стеком
   api                 Показать URL API
   logs                Последние строки логов
   benchmark           Запустить benchmark
+  eval [--model X]    Протестировать модели (качество + скорость)
   help                Эта справка
 USAGE
     ;;
