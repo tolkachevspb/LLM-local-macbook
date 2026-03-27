@@ -106,10 +106,9 @@ def _build_backend_cmd(model_file: str, alias: str) -> list:
         "-ngl", cfg.get("GPU_LAYERS", "999"),
         jinja_flag,
     ]
-    tmpl = cfg.get("CHAT_TEMPLATE", "")
-    if "gigachat" in model_file.lower() and not tmpl:
-        tmpl = "gigachat"
-    if tmpl:
+    # Chat template: только для GigaChat моделей (остальные используют встроенный шаблон)
+    if "gigachat" in model_file.lower() or "gigachat" in alias.lower():
+        tmpl = cfg.get("CHAT_TEMPLATE", "gigachat") or "gigachat"
         cmd += ["--chat-template", tmpl]
     return cmd
 
@@ -147,15 +146,34 @@ def switch_backend_async(model_file: str, alias: str) -> None:
             _switch_status["phase"] = "stopping"
             _switch_status["message"] = "Останавливаю текущую модель..."
             _kill_backend()
-            time.sleep(1)
+
+            # Ждём освобождения порта (до 10 сек)
+            import socket as _socket
+            for _ in range(20):
+                try:
+                    s = _socket.create_connection(("127.0.0.1", BACKEND_PORT), timeout=0.3)
+                    s.close()
+                    time.sleep(0.5)
+                except OSError:
+                    break  # порт свободен
+            else:
+                time.sleep(1)
 
             _switch_status["phase"] = "starting"
             _switch_status["message"] = f"Запускаю {alias}..."
             cmd = _build_backend_cmd(model_file, alias)
             log_path = os.path.join(ROOT_DIR, "logs", "backend.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            # llamafile — cosmopolitan binary, требует запуска через shell
+            # (прямой execve() падает с ENOEXEC на macOS/ARM)
+            import shlex as _shlex
+            shell_cmd = _shlex.join(str(x) for x in cmd)
             with open(log_path, "a") as lf:
-                proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, start_new_session=True)
+                proc = subprocess.Popen(
+                    shell_cmd, shell=True,
+                    stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                    start_new_session=True
+                )
             pid_file = os.path.join(ROOT_DIR, "run", "backend.pid")
             os.makedirs(os.path.dirname(pid_file), exist_ok=True)
             open(pid_file, "w").write(str(proc.pid))
@@ -1403,6 +1421,8 @@ class Handler(BaseHTTPRequestHandler):
             if _switch_status["phase"] not in {"ready", "error"}:
                 self._send_json({"error": "Switch already in progress"}, status=409)
                 return
+            # Помечаем СРАЗУ до запуска потока — иначе race condition на 409
+            _switch_status.update({"phase": "switching", "message": f"Инициализация {alias}..."})
             switch_backend_async(model_file, alias)
             self._send_json({"status": "switching", "alias": alias})
             return
