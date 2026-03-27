@@ -106,10 +106,9 @@ def _build_backend_cmd(model_file: str, alias: str) -> list:
         "-ngl", cfg.get("GPU_LAYERS", "999"),
         jinja_flag,
     ]
-    tmpl = cfg.get("CHAT_TEMPLATE", "")
-    if "gigachat" in model_file.lower() and not tmpl:
-        tmpl = "gigachat"
-    if tmpl:
+    # Chat template: только для GigaChat моделей (остальные используют встроенный шаблон)
+    if "gigachat" in model_file.lower() or "gigachat" in alias.lower():
+        tmpl = cfg.get("CHAT_TEMPLATE", "gigachat") or "gigachat"
         cmd += ["--chat-template", tmpl]
     return cmd
 
@@ -147,15 +146,34 @@ def switch_backend_async(model_file: str, alias: str) -> None:
             _switch_status["phase"] = "stopping"
             _switch_status["message"] = "Останавливаю текущую модель..."
             _kill_backend()
-            time.sleep(1)
+
+            # Ждём освобождения порта (до 10 сек)
+            import socket as _socket
+            for _ in range(20):
+                try:
+                    s = _socket.create_connection(("127.0.0.1", BACKEND_PORT), timeout=0.3)
+                    s.close()
+                    time.sleep(0.5)
+                except OSError:
+                    break  # порт свободен
+            else:
+                time.sleep(1)
 
             _switch_status["phase"] = "starting"
             _switch_status["message"] = f"Запускаю {alias}..."
             cmd = _build_backend_cmd(model_file, alias)
             log_path = os.path.join(ROOT_DIR, "logs", "backend.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            # llamafile — cosmopolitan binary, требует запуска через shell
+            # (прямой execve() падает с ENOEXEC на macOS/ARM)
+            import shlex as _shlex
+            shell_cmd = _shlex.join(str(x) for x in cmd)
             with open(log_path, "a") as lf:
-                proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, start_new_session=True)
+                proc = subprocess.Popen(
+                    shell_cmd, shell=True,
+                    stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                    start_new_session=True
+                )
             pid_file = os.path.join(ROOT_DIR, "run", "backend.pid")
             os.makedirs(os.path.dirname(pid_file), exist_ok=True)
             open(pid_file, "w").write(str(proc.pid))
@@ -204,11 +222,43 @@ def render_prompt(messages: list) -> str:
     return "".join(parts)
 
 
+def _stop_tokens() -> list:
+    """Stop-токены в зависимости от активной модели."""
+    alias = _current_model_alias.lower()
+    if "gigachat" in alias:
+        return ["<|message_sep|>", "</s>"]
+    if "phi" in alias:
+        # Phi генерирует "user" / "assistant" как plain text после ответа
+        return ["<|end|>", "<|user|>", "<|assistant|>", "<|system|>", "<|endoftext|>",
+                "\nuser", "\nassistant", "\nsystem"]
+    if "qwen" in alias:
+        return ["<|im_end|>", "<|im_start|>", "<|endoftext|>",
+                "\nuser", "\nassistant"]
+    if "gemma" in alias:
+        return ["<end_of_turn>", "<start_of_turn>"]
+    if "llama" in alias or "mistral" in alias:
+        return ["[INST]", "[/INST]", "</s>", "<|eot_id|>"]
+    # Универсальный fallback
+    return ["</s>", "<|endoftext|>", "<|end|>", "<|im_end|>",
+            "\nuser", "\nassistant"]
+
+
+# Паттерны стоп-токенов для финальной очистки ответа
+_STOP_PATTERNS = re.compile(
+    r"(<\|message_sep\|>.*|<\|role_sep\|>.*|<\|end_of_assistant\|>.*"
+    r"|<\|end\|>.*|<\|im_end\|>.*|<\|im_start\|>.*"
+    r"|<end_of_turn>.*|<start_of_turn>.*"
+    r"|<\|eot_id\|>.*|\[INST\].*|\[/INST\].*"
+    r"|<\|endoftext\|>.*|<\|user\|>.*|<\|assistant\|>.*|<\|system\|>.*"
+    r"|\n+user\s*$|\n+assistant\s*$|\n+system\s*$)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
 def clean_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"^\s*(\[\]|<\|[^>]+?\|>|\n)+", "", text)
-    text = re.sub(r"(<\|message_sep\|>.*)$", "", text, flags=re.DOTALL)
-    text = re.sub(r"(<\|role_sep\|>.*)$", "", text, flags=re.DOTALL)
+    text = _STOP_PATTERNS.sub("", text)
     return text.strip()
 
 
@@ -218,7 +268,7 @@ def backend_completion(prompt: str, temperature: float, max_tokens: int) -> tupl
         "prompt": prompt,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "stop": ["<|message_sep|>", "</s>"],
+        "stop": _stop_tokens(),
     }
     request = urllib.request.Request(
         f"{BACKEND_BASE}/v1/completions",
@@ -241,7 +291,7 @@ def backend_completion_stream(prompt: str, temperature: float, max_tokens: int):
         "prompt": prompt,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "stop": ["<|message_sep|>", "</s>"],
+        "stop": _stop_tokens(),
         "stream": True,
     }
     request = urllib.request.Request(
@@ -462,6 +512,13 @@ UI_HTML = r"""<!doctype html>
     .avatar-assistant {
       background: linear-gradient(135deg, #0ea5e9, #6366f1); color: #fff;
     }
+    /* Цвета аватаров для конкретных моделей */
+    .avatar-gigachat  { background: linear-gradient(135deg, #7c3aed, #db2777); color: #fff; }
+    .avatar-phi       { background: linear-gradient(135deg, #0369a1, #0ea5e9); color: #fff; }
+    .avatar-qwen      { background: linear-gradient(135deg, #047857, #10b981); color: #fff; }
+    .avatar-gemma     { background: linear-gradient(135deg, #b45309, #f59e0b); color: #fff; }
+    .avatar-llama     { background: linear-gradient(135deg, #7f1d1d, #ef4444); color: #fff; }
+    .avatar-mistral   { background: linear-gradient(135deg, #1e3a5f, #3b82f6); color: #fff; }
 
     .msg-body { flex: 1; min-width: 0; max-width: 780px; }
     .msg-row.user .msg-body { text-align: right; }
@@ -1025,6 +1082,39 @@ function loadSession(id) {
 // ── Chat render ───────────────────────────────────────────
 const emptyNode = document.getElementById('empty');
 
+// ── Профили моделей ──────────────────────────────────────────
+const MODEL_PROFILES = {
+  gigachat: { label: 'GigaChat',    letter: 'G', cls: 'avatar-gigachat' },
+  phi:      { label: 'Phi',         letter: 'Φ', cls: 'avatar-phi'      },
+  qwen:     { label: 'Qwen',        letter: 'Q', cls: 'avatar-qwen'     },
+  gemma:    { label: 'Gemma',       letter: 'Ge', cls: 'avatar-gemma'   },
+  llama:    { label: 'Llama',       letter: 'L', cls: 'avatar-llama'    },
+  mistral:  { label: 'Mistral',     letter: 'M', cls: 'avatar-mistral'  },
+};
+
+function modelProfile(alias) {
+  if (!alias) alias = '';
+  const a = alias.toLowerCase();
+  for (const [key, p] of Object.entries(MODEL_PROFILES)) {
+    if (a.includes(key)) return p;
+  }
+  // Fallback: первая буква алиаса
+  const letter = alias.charAt(0).toUpperCase() || '?';
+  return { label: alias || 'AI', letter, cls: 'avatar-assistant' };
+}
+
+function friendlyModelName(alias) {
+  if (!alias) return 'AI';
+  const p = modelProfile(alias);
+  // Добавляем размер модели если есть в алиасе (7b, 14b, ...)
+  const sizeMatch = alias.match(/(\d+\.?\d*b)/i);
+  const size = sizeMatch ? ' ' + sizeMatch[1].toUpperCase() : '';
+  // Добавляем квантизацию если есть
+  const quantMatch = alias.match(/(q4|q6|q8)[\w]*/i);
+  const quant = quantMatch ? ' · ' + quantMatch[0].toUpperCase() : '';
+  return p.label + size + quant;
+}
+
 function msgRowHtml(m, i) {
   const isUser = m.role === 'user';
   const bubbleCls = isUser ? 'bubble-user' : 'bubble-assistant';
@@ -1032,12 +1122,19 @@ function msgRowHtml(m, i) {
     ? `<div class="msg-bubble ${bubbleCls}">${escHtml(m.content)}</div>`
     : `<div class="msg-bubble ${bubbleCls} md" id="bubble-${i}">${renderMd(m.content)}</div>`;
   const time = m.ts ? new Date(m.ts).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '';
+
+  // Для сообщений ассистента берём профиль из сохранённого алиаса модели
+  const profile  = isUser ? null : modelProfile(m.model || '');
+  const avatarCls = isUser ? 'avatar-user' : (profile ? profile.cls : 'avatar-assistant');
+  const avatarLetter = isUser ? 'В' : (profile ? profile.letter : '?');
+  const senderName = isUser ? 'Вы' : friendlyModelName(m.model || '');
+
   return `
     <div class="msg-row ${m.role}" data-idx="${i}">
-      <div class="avatar ${isUser ? 'avatar-user' : 'avatar-assistant'}">${isUser ? 'В' : 'G'}</div>
+      <div class="avatar ${avatarCls}" title="${senderName}">${avatarLetter}</div>
       <div class="msg-body">
         <div class="msg-meta">
-          <span class="msg-name">${isUser ? 'Вы' : 'GigaChat'}</span>
+          <span class="msg-name">${senderName}</span>
           ${time ? `<span>${time}</span>` : ''}
         </div>
         ${content}
@@ -1126,7 +1223,8 @@ async function send() {
 
   sess.messages.push({ role: 'user', content: text, ts: Date.now() });
   apiMsgs.push({ role: 'user', content: text });
-  sess.messages.push({ role: 'assistant', content: '', ts: Date.now(), _streaming: true });
+  // Сохраняем алиас активной модели в каждом сообщении ассистента
+  sess.messages.push({ role: 'assistant', content: '', ts: Date.now(), model: activeModelAlias, _streaming: true });
   const idx = sess.messages.length - 1;
 
   document.getElementById('topbar-title').textContent = sess.title;
@@ -1228,6 +1326,9 @@ const switchTitle = document.getElementById('switchTitle');
 const switchMsg   = document.getElementById('switchMsg');
 const modelBadgeLabel = document.getElementById('modelBadgeLabel');
 
+// Единый источник правды для активного алиаса модели
+let activeModelAlias = modelBadgeLabel.textContent.trim();
+
 let switchPollTimer = null;
 
 modelBadge.addEventListener('click', async () => {
@@ -1296,6 +1397,7 @@ async function pollSwitchStatus() {
     if (s.phase === 'ready') {
       clearInterval(switchPollTimer);
       modelBadgeLabel.textContent = s.model;
+      activeModelAlias = s.model;          // синхронизируем глобал
       switchOverlay.classList.remove('on');
     } else if (s.phase === 'error') {
       clearInterval(switchPollTimer);
@@ -1322,6 +1424,17 @@ if (!sessions.length) {
 }
 renderSidebar();
 renderChat();
+
+// Синхронизируем activeModelAlias с сервером при старте
+(async () => {
+  try {
+    const s = await fetch('/admin/status').then(r => r.json());
+    if (s.model) {
+      activeModelAlias = s.model;
+      modelBadgeLabel.textContent = s.model;
+    }
+  } catch(e) {}
+})();
 </script>
 </body>
 </html>""".replace("__MODEL_ALIAS__", MODEL_ALIAS)
@@ -1370,6 +1483,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"models": scan_models(), "current": _current_model_alias})
         elif self.path == "/admin/status":
             self._send_json({**_switch_status, "model": _current_model_alias})
+        elif self.path == "/admin/reset":
+            _switch_status.update({"phase": "ready", "message": ""})
+            self._send_json({"status": "reset", "model": _current_model_alias})
         else:
             self._send_json({"error": "Not found"}, status=404)
 
@@ -1400,6 +1516,8 @@ class Handler(BaseHTTPRequestHandler):
             if _switch_status["phase"] not in {"ready", "error"}:
                 self._send_json({"error": "Switch already in progress"}, status=409)
                 return
+            # Помечаем СРАЗУ до запуска потока — иначе race condition на 409
+            _switch_status.update({"phase": "switching", "message": f"Инициализация {alias}..."})
             switch_backend_async(model_file, alias)
             self._send_json({"status": "switching", "alias": alias})
             return
