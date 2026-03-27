@@ -1192,8 +1192,7 @@ async function send() {
   sess.messages.push({ role: 'user', content: text, ts: Date.now() });
   apiMsgs.push({ role: 'user', content: text });
   // Сохраняем алиас активной модели в каждом сообщении ассистента
-  const activeModel = document.getElementById('modelBadgeLabel').textContent.trim();
-  sess.messages.push({ role: 'assistant', content: '', ts: Date.now(), model: activeModel, _streaming: true });
+  sess.messages.push({ role: 'assistant', content: '', ts: Date.now(), model: activeModelAlias, _streaming: true });
   const idx = sess.messages.length - 1;
 
   document.getElementById('topbar-title').textContent = sess.title;
@@ -1295,6 +1294,9 @@ const switchTitle = document.getElementById('switchTitle');
 const switchMsg   = document.getElementById('switchMsg');
 const modelBadgeLabel = document.getElementById('modelBadgeLabel');
 
+// Единый источник правды для активного алиаса модели
+let activeModelAlias = modelBadgeLabel.textContent.trim();
+
 let switchPollTimer = null;
 
 modelBadge.addEventListener('click', async () => {
@@ -1363,6 +1365,7 @@ async function pollSwitchStatus() {
     if (s.phase === 'ready') {
       clearInterval(switchPollTimer);
       modelBadgeLabel.textContent = s.model;
+      activeModelAlias = s.model;          // синхронизируем глобал
       switchOverlay.classList.remove('on');
     } else if (s.phase === 'error') {
       clearInterval(switchPollTimer);
@@ -1389,6 +1392,17 @@ if (!sessions.length) {
 }
 renderSidebar();
 renderChat();
+
+// Синхронизируем activeModelAlias с сервером при старте
+(async () => {
+  try {
+    const s = await fetch('/admin/status').then(r => r.json());
+    if (s.model) {
+      activeModelAlias = s.model;
+      modelBadgeLabel.textContent = s.model;
+    }
+  } catch(e) {}
+})();
 </script>
 </body>
 </html>""".replace("__MODEL_ALIAS__", MODEL_ALIAS)
