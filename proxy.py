@@ -880,6 +880,9 @@ UI_HTML = r"""<!doctype html>
           <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
         </svg>
       </button>
+      <button id="stopBtn" title="Остановить генерацию" style="display:none; width:36px; height:36px; border-radius:9px; flex-shrink:0; background:#ef4444; border:none; cursor:pointer; align-items:center; justify-content:center; color:#fff;">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+      </button>
     </div>
     <div class="composer-footer">
       <div id="genStatus">
@@ -1179,7 +1182,9 @@ function copyMsg(idx) {
 // ── Streaming send ────────────────────────────────────────
 const promptEl   = document.getElementById('prompt');
 const sendBtn    = document.getElementById('sendBtn');
+const stopBtn    = document.getElementById('stopBtn');
 const genStatus  = document.getElementById('genStatus');
+let   activeAbort = null;
 const tempRange  = document.getElementById('tempRange');
 const tempVal    = document.getElementById('tempVal');
 const maxTokens  = document.getElementById('maxTokens');
@@ -1231,13 +1236,16 @@ async function send() {
   renderSidebar();
   renderChat();
 
-  sendBtn.disabled = true;
+  sendBtn.style.display = 'none';
+  stopBtn.style.display  = 'flex';
   genStatus.classList.add('on');
+  activeAbort = new AbortController();
 
   try {
     const resp = await fetch('/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: activeAbort.signal,
       body: JSON.stringify({
         model: '__MODEL_ALIAS__',
         messages: apiMsgs,
@@ -1285,11 +1293,17 @@ async function send() {
     saveSessions();
     // Final full render to apply markdown properly and remove cursor
     renderChat();
-    sendBtn.disabled = false;
+    sendBtn.style.display = 'flex';
+    stopBtn.style.display  = 'none';
     genStatus.classList.remove('on');
+    activeAbort = null;
     promptEl.focus();
   }
 }
+
+stopBtn.addEventListener('click', () => {
+  if (activeAbort) activeAbort.abort();
+});
 
 sendBtn.addEventListener('click', send);
 promptEl.addEventListener('keydown', e => {
@@ -1630,6 +1644,8 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         self._write_sse("[DONE]")
                         return
+                # Backend closed stream without explicit [DONE] — send it now
+                self._write_sse("[DONE]")
         except urllib.error.URLError as exc:
             self._send_json({"error": f"Backend unavailable: {exc}"}, status=502)
         except Exception as exc:
