@@ -197,7 +197,35 @@ def switch_backend_async(model_file: str, alias: str) -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
+def _render_prompt_glm(messages: list) -> str:
+    """GLM4 native format: [gMASK]<sop><|role|>\ncontent"""
+    parts = []
+    first = True
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        if role == "system":
+            prefix = "[gMASK]<sop><|system|>\n" if first else "<|system|>\n"
+            parts.append(prefix + content)
+            first = False
+        elif role in {"user", "human"}:
+            prefix = "[gMASK]<sop><|user|>\n" if first else "<|user|>\n"
+            parts.append(prefix + content)
+            first = False
+        elif role == "assistant":
+            parts.append("<|assistant|>\n" + content)
+    if not messages or messages[-1].get("role") != "assistant":
+        parts.append("<|assistant|>\n")
+    return "".join(parts)
+
+
 def render_prompt(messages: list) -> str:
+    alias = _current_model_alias.lower()
+    if "glm" in alias:
+        return _render_prompt_glm(messages)
+    # GigaChat format
     parts = [
         "<s>developer system<|role_sep|>\n",
         DEVELOPER_SYSTEM,
@@ -236,6 +264,8 @@ def _stop_tokens() -> list:
                 "\nuser", "\nassistant"]
     if "gemma" in alias:
         return ["<end_of_turn>", "<start_of_turn>"]
+    if "glm" in alias:
+        return ["<|user|>", "<|observation|>", "</s>", "<eop>"]
     if "llama" in alias or "mistral" in alias:
         return ["[INST]", "[/INST]", "</s>", "<|eot_id|>"]
     # Универсальный fallback
@@ -250,6 +280,7 @@ _STOP_PATTERNS = re.compile(
     r"|<end_of_turn>.*|<start_of_turn>.*"
     r"|<\|eot_id\|>.*|\[INST\].*|\[/INST\].*"
     r"|<\|endoftext\|>.*|<\|user\|>.*|<\|assistant\|>.*|<\|system\|>.*"
+    r"|<\|observation\|>.*|<eop>.*|\[gMASK\].*"
     r"|\n+user\s*$|\n+assistant\s*$|\n+system\s*$)",
     re.DOTALL | re.IGNORECASE,
 )
@@ -519,6 +550,7 @@ UI_HTML = r"""<!doctype html>
     .avatar-gemma     { background: linear-gradient(135deg, #b45309, #f59e0b); color: #fff; }
     .avatar-llama     { background: linear-gradient(135deg, #7f1d1d, #ef4444); color: #fff; }
     .avatar-mistral   { background: linear-gradient(135deg, #1e3a5f, #3b82f6); color: #fff; }
+    .avatar-glm       { background: linear-gradient(135deg, #0f766e, #06b6d4); color: #fff; }
 
     .msg-body { flex: 1; min-width: 0; max-width: 780px; }
     .msg-row.user .msg-body { text-align: right; }
@@ -1093,6 +1125,7 @@ const MODEL_PROFILES = {
   gemma:    { label: 'Gemma',       letter: 'Ge', cls: 'avatar-gemma'   },
   llama:    { label: 'Llama',       letter: 'L', cls: 'avatar-llama'    },
   mistral:  { label: 'Mistral',     letter: 'M', cls: 'avatar-mistral'  },
+  glm:      { label: 'GLM',         letter: 'Z', cls: 'avatar-glm'      },
 };
 
 function modelProfile(alias) {

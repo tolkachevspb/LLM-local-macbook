@@ -51,6 +51,12 @@ case "${PROFILE}" in
       "https://huggingface.co/bartowski/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf" \
       "${MODELS_DIR}/gemma-3-12b-it-Q4_K_M.gguf"
     ;;
+  glm4-9b)
+    # GLM-4-9B-Chat Q4_K_M — 5.5 GB, ~75 tok/s, Zhipu AI, сильный в китайском и коде
+    download \
+      "https://huggingface.co/bartowski/glm-4-9b-chat-GGUF/resolve/main/glm-4-9b-chat-Q4_K_M.gguf" \
+      "${MODELS_DIR}/glm-4-9b-chat-Q4_K_M.gguf"
+    ;;
   list)
     echo ""
     echo "Доступные профили (оптимально для Apple M5 24GB):"
@@ -61,11 +67,12 @@ case "${PROFILE}" in
     echo "  qwen-14b      Qwen2.5-14B Q4_K_M       ~9 GB    ~45 tok/s  лучшее качество"
     echo "  phi3.5-mini   Phi-3.5-mini Q4_K_M       ~2.2 GB  ~140 tok/s код и логика (публичная)"
     echo "  gemma3-12b    Gemma-3-12B Q4_K_M        ~8 GB    ~55 tok/s  Google, разносторонний"
+    echo "  glm4-9b       GLM-4-9B-Chat Q4_K_M      ~5.5 GB  ~75 tok/s  Zhipu AI, китайский + код"
     echo ""
     exit 0
     ;;
   *)
-    echo "Использование: $0 {gigachat-q6|gigachat-q8|qwen-7b|qwen-14b|phi3.5-mini|gemma3-12b|list}"
+    echo "Использование: $0 {gigachat-q6|gigachat-q8|qwen-7b|qwen-14b|phi3.5-mini|gemma3-12b|glm4-9b|list}"
     echo "Список с описанием: $0 list"
     exit 1
     ;;
