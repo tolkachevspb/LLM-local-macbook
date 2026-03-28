@@ -439,7 +439,55 @@ TEST_CASES = [
         "weight": 2,
     },
 
-    # ── 8. Стресс-тест ──────────────────────────────────────────────────────
+    # ── 8. Китайский язык ───────────────────────────────────────────────────
+    {
+        "id": "zh_01",
+        "category": "Китайский язык",
+        "name": "Столица Китая (вопрос на китайском)",
+        "prompt": "请用中文回答：中国的首都是哪里？只回答城市名称。",
+        "checks": [
+            ("contains_any", ["北京", "beijing", "Beijing", "Peking", "Пекин", "пекин"]),
+            ("length_max", 30),
+        ],
+        "weight": 2,
+    },
+    {
+        "id": "zh_02",
+        "category": "Китайский язык",
+        "name": "Арифметика на китайском",
+        "prompt": "25乘以4等于多少？只回答数字。",
+        "checks": [
+            ("exact_number", 100),
+            ("length_max", 20),
+        ],
+        "weight": 2,
+    },
+    {
+        "id": "zh_03",
+        "category": "Китайский язык",
+        "name": "Перевод с китайского на русский",
+        "prompt": "将以下中文翻译成俄语，只输出译文：谢谢你的帮助。",
+        "checks": [
+            ("has_cyrillic", None),
+            ("contains_any", ["спасибо", "помощ", "благодар"]),
+            ("length_max", 120),
+        ],
+        "weight": 2,
+    },
+    {
+        "id": "zh_04",
+        "category": "Китайский язык",
+        "name": "Ответ на китайском: объяснение понятия",
+        "prompt": "用中文解释什么是人工智能，用一两句话。",
+        "checks": [
+            ("has_chinese", None),
+            ("length_min", 10),
+            ("length_max", 300),
+        ],
+        "weight": 2,
+    },
+
+    # ── 9. Стресс-тест ──────────────────────────────────────────────────────
     {
         "id": "stress_01",
         "category": "Стресс",
@@ -511,6 +559,8 @@ def run_check(check_type, arg, response: str) -> bool:
         return bool(re.search(r'[а-яёА-ЯЁ]', response))
     if check_type == "no_cyrillic":
         return not bool(re.search(r'[а-яёА-ЯЁ]', response))
+    if check_type == "has_chinese":
+        return bool(re.search(r'[\u4e00-\u9fff]', response))
     if check_type == "regex":
         return bool(re.search(arg, response))
     if check_type == "not_refusal":
@@ -716,8 +766,8 @@ def make_report(all_model_results: list, ts: str) -> str:
 
     # Summary table
     lines += ["## Сводная таблица", ""]
-    header = "| Модель | Средний балл | Код | Логика | Инструкции | tok/s |"
-    sep    = "|---|---|---|---|---|---|"
+    header = "| Модель | Средний балл | Код | Логика | Инструкции | Китайский | tok/s |"
+    sep    = "|---|---|---|---|---|---|---|"
     lines += [header, sep]
 
     for mr in all_model_results:
@@ -735,7 +785,7 @@ def make_report(all_model_results: list, ts: str) -> str:
 
         lines.append(
             f"| {alias} | **{avg}%** | {cat_score('Код')} | {cat_score('Логика/Математика')} "
-            f"| {cat_score('Инструкции')} | {tps} |"
+            f"| {cat_score('Инструкции')} | {cat_score('Китайский язык')} | {tps} |"
         )
     lines += [""]
 
